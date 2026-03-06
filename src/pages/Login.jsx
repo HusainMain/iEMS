@@ -139,26 +139,7 @@ const Login = () => {
                         </button>
                     </div>
 
-                    {import.meta.env.DEV && (
-                        <div className="pt-4 border-t border-gray-200 text-center">
-                            <button
-                                type="button"
-                                onClick={seedDummyUsers}
-                                disabled={loading}
-                                className="text-sm text-gray-500 hover:text-blue-600 focus:outline-none underline"
-                            >
-                                (Dev Only) Seed Dummy Users
-                            </button>
-
-                            <button
-                                type="button"
-                                onClick={() => navigate('/admin/home')}
-                                className="mt-4 text-sm text-red-500 hover:text-red-600 focus:outline-none underline block w-full"
-                            >
-                                (Emergency) Bypass to Admin Dashboard
-                            </button>
-                        </div>
-                    )}
+                    {/* Removed Dev Only Buttons */}
                 </form>
             </div>
         </div>

@@ -41,6 +41,17 @@ const TeacherClasses = () => {
     const [maxMarks, setMaxMarks] = useState('');
     const [creatingTest, setCreatingTest] = useState(false);
 
+    // Bulk Marks State
+    const [bulkClassId, setBulkClassId] = useState('');
+    const [bulkSubjectId, setBulkSubjectId] = useState('');
+    const [bulkBatch, setBulkBatch] = useState('All');
+    const [bulkExamType, setBulkExamType] = useState('');
+    const [bulkMaxMarks, setBulkMaxMarks] = useState('');
+    const [bulkStudents, setBulkStudents] = useState([]);
+    const [bulkMarks, setBulkMarks] = useState({});
+    const [isSavingBulk, setIsSavingBulk] = useState(false);
+    const [loadingBulkStudents, setLoadingBulkStudents] = useState(false);
+
     // Initial Fetch (Subjects -> Classes)
     useEffect(() => {
         const fetchData = async () => {
@@ -113,6 +124,43 @@ const TeacherClasses = () => {
         };
         fetchSubjectData();
     }, [selectedSubjectId, teacherSubjects]);
+
+    // Fetch Students for Bulk Marks
+    useEffect(() => {
+        const fetchBulkStudents = async () => {
+            if (!bulkClassId) {
+                setBulkStudents([]);
+                return;
+            }
+            setLoadingBulkStudents(true);
+            try {
+                let q = query(
+                    collection(db, 'users'), 
+                    where('role', '==', 'student'),
+                    where('classId', '==', bulkClassId)
+                );
+                
+                if (bulkBatch !== 'All') {
+                    q = query(q, where('batch', '==', bulkBatch));
+                }
+
+                const snapshot = await getDocs(q);
+                const students = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                // Sort by Enrollment No if available, else by name
+                students.sort((a, b) => (a.enrollmentNo || '').localeCompare(b.enrollmentNo || '') || a.fullName.localeCompare(b.fullName));
+                setBulkStudents(students);
+                
+                // Clear marks when list changes
+                setBulkMarks({});
+            } catch (err) {
+                console.error("Error fetching bulk students:", err);
+                toast.error("Failed to fetch students");
+            } finally {
+                setLoadingBulkStudents(false);
+            }
+        };
+        fetchBulkStudents();
+    }, [bulkClassId, bulkBatch]);
 
     // Computed Properties for Dropdowns
     const uniqueClassIds = [...new Set(teacherSubjects.map(s => s.classId))];
@@ -390,6 +438,54 @@ const TeacherClasses = () => {
         setGrades(prev => ({ ...prev, [studentId]: numValue }));
     };
 
+    const handleSaveBulkMarks = async () => {
+        if (!bulkClassId || !bulkSubjectId || !bulkExamType || !bulkMaxMarks) {
+            toast.error("Please fill all filters!");
+            return;
+        }
+
+        const entries = Object.entries(bulkMarks).filter(([_, val]) => val !== '');
+        if (entries.length === 0) {
+            toast.error("No marks entered!");
+            return;
+        }
+
+        setIsSavingBulk(true);
+        try {
+            const batch = writeBatch(db);
+            const timestamp = serverTimestamp();
+
+            for (const [studentId, marks] of entries) {
+                const student = bulkStudents.find(s => s.id === studentId);
+                const recordId = `${bulkSubjectId}_${studentId}_${bulkExamType}_${Date.now()}`;
+                const markRef = doc(collection(db, 'marks'), recordId);
+
+                batch.set(markRef, {
+                    studentId,
+                    enrollmentNo: student.enrollmentNo || 'N/A',
+                    studentName: student.fullName,
+                    subjectId: bulkSubjectId,
+                    classId: bulkClassId,
+                    batch: student.batch || 'All',
+                    examType: bulkExamType,
+                    marksObtained: Number(marks),
+                    maxMarks: Number(bulkMaxMarks),
+                    teacherId: user.uid,
+                    timestamp
+                });
+            }
+
+            await batch.commit();
+            toast.success(`Successfully saved marks for ${entries.length} students!`);
+            setBulkMarks({});
+        } catch (err) {
+            console.error("Bulk Save Error:", err);
+            toast.error("Failed to save marks");
+        } finally {
+            setIsSavingBulk(false);
+        }
+    };
+
     const handleSubmitGrades = async () => {
         if (!selectedAssessment) return;
         
@@ -473,18 +569,30 @@ const TeacherClasses = () => {
                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                     {/* Sub-Tabs */}
                     <div className="flex border-b border-gray-200 bg-gray-50">
-                        {['attendance', 'announcements', 'assessments'].map((tab) => (
-                            <button
-                                key={tab}
-                                onClick={() => setActiveTab(tab)}
-                                className={`flex-1 py-4 text-sm font-medium text-center capitalize transition-colors ${activeTab === tab
-                                    ? 'text-blue-600 border-b-2 border-blue-600 bg-white'
-                                    : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
-                                    }`}
-                            >
-                                {tab}
-                            </button>
-                        ))}
+                        <button
+                            onClick={() => setActiveTab('attendance')}
+                            className={`flex items-center px-4 py-2 text-sm font-medium rounded-lg transition ${activeTab === 'attendance' ? 'bg-indigo-100 text-indigo-700' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'}`}
+                        >
+                            <Users className="w-4 h-4 mr-2" /> Attendance
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('announcements')}
+                            className={`flex items-center px-4 py-2 text-sm font-medium rounded-lg transition ${activeTab === 'announcements' ? 'bg-indigo-100 text-indigo-700' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'}`}
+                        >
+                            <FileText className="w-4 h-4 mr-2" /> Announcements
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('assessments')}
+                            className={`flex items-center px-4 py-2 text-sm font-medium rounded-lg transition ${activeTab === 'assessments' ? 'bg-indigo-100 text-indigo-700' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'}`}
+                        >
+                            <BookOpen className="w-4 h-4 mr-2" /> Assessments
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('bulk-marks')}
+                            className={`flex items-center px-4 py-2 text-sm font-medium rounded-lg transition ${activeTab === 'bulk-marks' ? 'bg-indigo-100 text-indigo-700' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'}`}
+                        >
+                            <Plus className="w-4 h-4 mr-2" /> Bulk Marks
+                        </button>
                     </div>
 
                     <div className="p-6">
@@ -811,6 +919,175 @@ const TeacherClasses = () => {
                     <p className="font-medium">Please select a Class and Subject from the dropdowns above to access the classroom controls.</p>
                 </div>
             )}
+                {activeTab === 'bulk-marks' && (
+                    <div className="space-y-6">
+                        {/* Filters Card */}
+                        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                            <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center">
+                                <Plus className="w-5 h-5 mr-2 text-indigo-600" /> Bulk Marks Entry Grid
+                            </h3>
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+                                <div>
+                                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Class</label>
+                                    <select 
+                                        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:ring-indigo-500 focus:border-indigo-500"
+                                        value={bulkClassId}
+                                        onChange={(e) => {
+                                            setBulkClassId(e.target.value);
+                                            setBulkSubjectId('');
+                                        }}
+                                    >
+                                        <option value="">Select Class</option>
+                                        {availableClasses.map(c => (
+                                            <option key={c.id} value={c.id}>{c.className} ({c.section})</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Batch</label>
+                                    <select 
+                                        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:ring-indigo-500 focus:border-indigo-500"
+                                        value={bulkBatch}
+                                        onChange={(e) => setBulkBatch(e.target.value)}
+                                    >
+                                        <option value="All">All Batches</option>
+                                        <option value="A">Batch A</option>
+                                        <option value="B">Batch B</option>
+                                        <option value="C">Batch C</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Subject</label>
+                                    <select 
+                                        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:ring-indigo-500 focus:border-indigo-500"
+                                        value={bulkSubjectId}
+                                        onChange={(e) => setBulkSubjectId(e.target.value)}
+                                        disabled={!bulkClassId}
+                                    >
+                                        <option value="">Select Subject</option>
+                                        {availableSubjects.map(s => (
+                                            <option key={s.id} value={s.id}>{s.subjectName}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Exam Type</label>
+                                    <select 
+                                        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:ring-indigo-500 focus:border-indigo-500"
+                                        value={bulkExamType}
+                                        onChange={(e) => setBulkExamType(e.target.value)}
+                                    >
+                                        <option value="">Select Type</option>
+                                        <option value="Unit Test 1">Unit Test 1</option>
+                                        <option value="Unit Test 2">Unit Test 2</option>
+                                        <option value="Mid-Term">Mid-Term</option>
+                                        <option value="Final Exam">Final Exam</option>
+                                        <option value="Assignment">Assignment</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Max Marks</label>
+                                    <input 
+                                        type="number"
+                                        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:ring-indigo-500 focus:border-indigo-500"
+                                        placeholder="Max"
+                                        value={bulkMaxMarks}
+                                        onChange={(e) => setBulkMaxMarks(e.target.value)}
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Data Entry Grid */}
+                        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                            <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+                                <table className="w-full text-left">
+                                    <thead className="bg-gray-50 sticky top-0 z-10">
+                                        <tr>
+                                            <th className="px-6 py-4 text-xs font-semibold text-gray-500 uppercase tracking-wider w-1/4">Enrollment No</th>
+                                            <th className="px-6 py-4 text-xs font-semibold text-gray-500 uppercase tracking-wider w-1/2">Student Name</th>
+                                            <th className="px-6 py-4 text-xs font-semibold text-gray-500 uppercase tracking-wider w-1/4">Marks Obtained</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-gray-100">
+                                        {loadingBulkStudents ? (
+                                            <tr>
+                                                <td colSpan="3" className="px-6 py-12 text-center text-gray-400">
+                                                    <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-indigo-400" />
+                                                    Loading students...
+                                                </td>
+                                            </tr>
+                                        ) : bulkStudents.length > 0 ? (
+                                            bulkStudents.map(stu => (
+                                                <tr key={stu.id} className="hover:bg-gray-50 transition-colors">
+                                                    <td className="px-6 py-4">
+                                                        <span className="text-sm font-mono text-indigo-600 bg-indigo-50 px-2 py-1 rounded">
+                                                            {stu.enrollmentNo || 'N/A'}
+                                                        </span>
+                                                    </td>
+                                                    <td className="px-6 py-4">
+                                                        <div className="flex items-center">
+                                                            <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-xs mr-3">
+                                                                {stu.fullName.charAt(0)}
+                                                            </div>
+                                                            <span className="text-sm font-medium text-gray-900">{stu.fullName}</span>
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-6 py-4">
+                                                        <input 
+                                                            type="number"
+                                                            className={`w-24 px-3 py-2 border rounded-lg text-sm focus:ring-indigo-500 focus:border-indigo-500 ${
+                                                                bulkMarks[stu.id] > (Number(bulkMaxMarks) || Infinity) ? 'border-red-500 bg-red-50' : 'border-gray-200 bg-white'
+                                                            }`}
+                                                            placeholder="0"
+                                                            value={bulkMarks[stu.id] || ''}
+                                                            onChange={(e) => {
+                                                                const val = e.target.value;
+                                                                if (val !== '' && Number(val) > (Number(bulkMaxMarks) || 100)) return;
+                                                                setBulkMarks(prev => ({ ...prev, [stu.id]: val }));
+                                                            }}
+                                                        />
+                                                    </td>
+                                                </tr>
+                                            ))
+                                        ) : (
+                                            <tr>
+                                                <td colSpan="3" className="px-6 py-12 text-center text-gray-500 italic">
+                                                    {bulkClassId ? "No students found in this class/batch." : "Please select a class to load students."}
+                                                </td>
+                                            </tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            {/* Footer Action */}
+                            <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-between items-center">
+                                <div className="text-sm text-gray-500">
+                                    {Object.keys(bulkMarks).length} students graded
+                                </div>
+                                <button
+                                    onClick={handleSaveBulkMarks}
+                                    disabled={isSavingBulk || bulkStudents.length === 0}
+                                    className={`px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition font-bold shadow-md flex items-center ${isSavingBulk || bulkStudents.length === 0 ? 'opacity-70 cursor-not-allowed' : ''}`}
+                                >
+                                    {isSavingBulk ? (
+                                        <>
+                                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                            Saving All...
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Check className="w-4 h-4 mr-2" />
+                                            Save All Marks
+                                        </>
+                                    )}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </main>
         </div>
     );
 };

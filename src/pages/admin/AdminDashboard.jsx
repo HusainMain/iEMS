@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { collection, onSnapshot, query, doc, setDoc, deleteDoc, updateDoc, where, getDocs } from 'firebase/firestore';
+import { collection, onSnapshot, query, doc, setDoc, deleteDoc, updateDoc, where, getDocs, writeBatch } from 'firebase/firestore';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { db, secondaryAuth } from '../../services/firebase.config';
 import { addLog } from '../../services/db';
 import { useAuth } from '../../contexts/AuthContext';
-import { Loader2, Plus, X, AlertCircle, Edit, Trash2, BookOpen, GraduationCap, ChevronDown, ChevronRight, Clock } from 'lucide-react';
+import { Loader2, Plus, X, AlertCircle, Edit, Trash2, BookOpen, GraduationCap, ChevronDown, ChevronRight, Clock, Upload, FileText } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
+import Papa from 'papaparse';
+import toast from 'react-hot-toast';
 
 const AdminDashboard = ({ defaultTab = 'users' }) => {
     const { user: currentUser } = useAuth();
@@ -52,9 +54,12 @@ const AdminDashboard = ({ defaultTab = 'users' }) => {
 
     // Modal State - User
     const [showModal, setShowModal] = useState(false);
+    const [showBulkModal, setShowBulkModal] = useState(false);
     const [isEditing, setIsEditing] = useState(false);
     const [editingUserId, setEditingUserId] = useState(null);
     const [loadingCreate, setLoadingCreate] = useState(false);
+    const [bulkFile, setBulkFile] = useState(null);
+    const [isParsing, setIsParsing] = useState(false);
     const [error, setError] = useState('');
     const [formData, setFormData] = useState({
         fullName: '',
@@ -176,15 +181,105 @@ const AdminDashboard = ({ defaultTab = 'users' }) => {
                 // 2. Add to Firestore using primary DB connection
                 await setDoc(doc(db, "users", newUid), newUser);
                 await addLog(`Created user: ${formData.fullName || formData.email}`, currentUser?.email);
+                toast.success(`User ${formData.fullName} created!`);
             }
 
             closeUserModal();
         } catch (err) {
             console.error("Error saving user:", err);
             setError(err.message);
+            toast.error(err.message);
         } finally {
             setLoadingCreate(false);
         }
+    };
+
+    const handleBulkUpload = async (e) => {
+        e.preventDefault();
+        if (!bulkFile) return;
+
+        setIsParsing(true);
+        setError('');
+
+        Papa.parse(bulkFile, {
+            header: true,
+            skipEmptyLines: true,
+            complete: async (results) => {
+                const data = results.data;
+                const batch = writeBatch(db);
+                let successCount = 0;
+                let failCount = 0;
+
+                try {
+                    for (const row of data) {
+                        const { Name, Email, ClassId, Batch, EnrollmentNo } = row;
+
+                        if (!Name || !Email || !ClassId) {
+                            failCount++;
+                            continue;
+                        }
+
+                        try {
+                            // 1. Create Auth Account
+                            const userCredential = await createUserWithEmailAndPassword(secondaryAuth, Email, 'Student@123');
+                            const uid = userCredential.user.uid;
+
+                            // 2. Prepare Firestore Data
+                            const studentData = {
+                                fullName: Name,
+                                email: Email,
+                                role: 'student',
+                                classId: ClassId,
+                                batch: Batch || 'All',
+                                createdAt: new Date().toISOString()
+                            };
+
+                            // Priority Logic for Enrollment Number
+                            if (EnrollmentNo && EnrollmentNo.trim() !== '') {
+                                studentData.enrollmentNo = String(EnrollmentNo).trim();
+                            } else {
+                                // Fallback: Auto-generate sequential enrollment number
+                                const currentClassStudents = users.filter(u => u.role === 'student' && u.classId === ClassId);
+                                const count = currentClassStudents.length + (successCount + 1);
+                                const paddedCount = String(count).padStart(3, '0');
+                                studentData.enrollmentNo = `ENR-${ClassId.substring(0, 4).toUpperCase()}-${paddedCount}`;
+                            }
+
+                            const userRef = doc(db, 'users', uid);
+                            batch.set(userRef, studentData);
+                            successCount++;
+
+                        } catch (err) {
+                            console.error(`Error creating student ${Email}:`, err);
+                            failCount++;
+                        }
+                    }
+
+                    if (successCount > 0) {
+                        await batch.commit();
+                        await addLog(`Bulk upload: imported ${successCount} students`, currentUser?.email);
+                        toast.success(`Successfully imported ${successCount} students!`);
+                        if (failCount > 0) toast.error(`Failed to import ${failCount} rows.`);
+                    } else if (failCount > 0) {
+                        toast.error("All rows failed to import. Check console or CSV format.");
+                    }
+
+                    setShowBulkModal(false);
+                    setBulkFile(null);
+                } catch (err) {
+                    console.error("Fatal error during bulk import:", err);
+                    setError("Bulk import failed: " + err.message);
+                    toast.error("Bulk Import Failed");
+                } finally {
+                    setIsParsing(false);
+                }
+            },
+            error: (err) => {
+                console.error("CSV Parse Error:", err);
+                setError("Failed to parse CSV: " + err.message);
+                setIsParsing(false);
+            }
+        });
     };
 
     const requestDelete = (type, data) => {
@@ -417,13 +512,26 @@ const AdminDashboard = ({ defaultTab = 'users' }) => {
                             </>
                         )}
                         {activeTab === 'users' && (
-                            <button
-                                onClick={() => setShowModal(true)}
-                                className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition shadow-sm font-medium text-sm text-center flex items-center"
-                            >
-                                <Plus className="w-4 h-4 mr-2" />
-                                Add User
-                            </button>
+                            <div className="flex space-x-2">
+                                <button
+                                    onClick={() => setShowBulkModal(true)}
+                                    className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-4 py-2 rounded-lg hover:bg-emerald-100 transition shadow-sm font-medium text-sm text-center flex items-center"
+                                >
+                                    <Upload className="w-4 h-4 mr-2" />
+                                    Bulk CSV
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        setFormData({ fullName: '', email: '', password: '', role: 'student', classId: '', batch: 'All' });
+                                        setIsEditing(false);
+                                        setShowModal(true);
+                                    }}
+                                    className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition shadow-sm font-medium text-sm text-center flex items-center"
+                                >
+                                    <Plus className="w-4 h-4 mr-2" />
+                                    Add User
+                                </button>
+                            </div>
                         )}
                     </div>
                 </div>
@@ -1022,6 +1130,98 @@ const AdminDashboard = ({ defaultTab = 'users' }) => {
                                             Saving...
                                         </>
                                     ) : (isEditingSubject ? 'Update Subject' : 'Create Subject')}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Bulk Upload Modal */}
+            {showBulkModal && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+                    <div className="bg-white rounded-xl shadow-xl max-w-md w-full overflow-hidden">
+                        <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-emerald-50">
+                            <h2 className="text-xl font-bold text-emerald-900 flex items-center">
+                                <Upload className="w-5 h-5 mr-2" /> Bulk Student Import
+                            </h2>
+                            <button
+                                onClick={() => setShowBulkModal(false)}
+                                className="text-emerald-400 hover:text-emerald-600 transition"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        <form onSubmit={handleBulkUpload} className="p-6">
+                            <div className="mb-6">
+                                <p className="text-sm text-gray-600 mb-4 bg-blue-50 p-3 rounded-lg border border-blue-100">
+                                    <strong>Required Headers:</strong> Name, Email, ClassId, Batch, EnrollmentNo.
+                                    <br />
+                                    <span className="text-xs italic">* EnrollmentNo will be auto-generated if left blank.</span>
+                                </p>
+
+                                {error && (
+                                    <div className="mb-4 flex items-center space-x-2 bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-lg text-sm">
+                                        <AlertCircle className="w-5 h-5 flex-shrink-0" />
+                                        <span>{error}</span>
+                                    </div>
+                                )}
+
+                                <div 
+                                    className={`border-2 border-dashed rounded-xl p-8 flex flex-col items-center justify-center transition-colors cursor-pointer ${
+                                        bulkFile ? 'border-emerald-500 bg-emerald-50' : 'border-gray-300 hover:border-emerald-400 hover:bg-gray-50'
+                                    }`}
+                                    onClick={() => document.getElementById('bulk-csv-input').click()}
+                                >
+                                    <input 
+                                        id="bulk-csv-input"
+                                        type="file"
+                                        accept=".csv"
+                                        className="hidden"
+                                        onChange={(e) => setBulkFile(e.target.files[0])}
+                                    />
+                                    {bulkFile ? (
+                                        <>
+                                            <FileText className="w-12 h-12 text-emerald-600 mb-2" />
+                                            <p className="text-sm font-bold text-gray-900">{bulkFile.name}</p>
+                                            <button 
+                                                type="button" 
+                                                className="text-xs text-red-500 underline mt-2"
+                                                onClick={(e) => { e.stopPropagation(); setBulkFile(null); }}
+                                            >
+                                                Remove File
+                                            </button>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Upload className="w-12 h-12 text-gray-300 mb-2" />
+                                            <p className="text-sm font-medium text-gray-700">Click to upload or drag & drop</p>
+                                            <p className="text-xs text-gray-500 mt-1">Accepts .CSV files only</p>
+                                        </>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="flex space-x-3 justify-end">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowBulkModal(false)}
+                                    className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition font-medium text-sm"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={!bulkFile || isParsing}
+                                    className={`px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition font-medium text-sm flex items-center ${(!bulkFile || isParsing) ? 'opacity-70 cursor-not-allowed' : ''}`}
+                                >
+                                    {isParsing ? (
+                                        <>
+                                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                            Importing...
+                                        </>
+                                    ) : 'Start Import'}
                                 </button>
                             </div>
                         </form>
