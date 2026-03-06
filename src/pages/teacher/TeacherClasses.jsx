@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { collection, query, where, getDocs, addDoc, serverTimestamp, setDoc, doc, deleteDoc } from 'firebase/firestore';
-import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
-import { db, storage } from '../../services/firebase.config';
+import { db } from '../../services/firebase.config';
 import { Loader2, Upload, FileText, Check, X, Plus, BookOpen, AlertCircle, Trash2, DownloadCloud, Users } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -214,38 +213,33 @@ const TeacherClasses = () => {
                     return;
                 }
 
-                setUploadProgress('Uploading file...');
-                const fileRef = ref(storage, `announcements/${selectedSubjectId}/${Date.now()}_${announcementFile.name}`);
-                const uploadTask = uploadBytesResumable(fileRef, announcementFile);
+                setUploadProgress('Uploading to Cloudinary...');
 
-                await new Promise((resolve, reject) => {
-                    uploadTask.on('state_changed', 
-                        (snapshot) => {
-                            const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-                            console.log(`Upload is ${progress}% done`);
-                            setUploadProgress(`Uploading: ${Math.round(progress)}%`);
-                        }, 
-                        (error) => {
-                            console.error("Upload failed", error);
-                            if (error.code === 'storage/unauthorized') {
-                                toast.error("Permission Denied (403): You don't have access to upload.");
-                            } else if (error.code === 'storage/object-not-found') {
-                                toast.error("Object not found (404).");
-                            } else {
-                                toast.error(`Upload error: ${error.message}`);
-                            }
-                            setPostingAnnouncement(false);
-                            setUploadProgress('');
-                            reject(error);
-                        }, 
-                        () => {
-                            setUploadProgress(null);
-                            resolve();
-                        }
-                    );
+                const formData = new FormData();
+                formData.append('file', announcementFile);
+                
+                // Ensure to set these in your .env file
+                const uploadPreset = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET || 'iems_preset';
+                const cloudName = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || 'demo';
+
+                formData.append('upload_preset', uploadPreset);
+
+                const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`, {
+                    method: 'POST',
+                    body: formData
                 });
 
-                fileURL = await getDownloadURL(uploadTask.snapshot.ref);
+                const data = await response.json();
+
+                if (!response.ok) {
+                    console.error("Cloudinary error:", data);
+                    toast.error(`Upload error: ${data.error?.message || 'Failed to upload to Cloudinary'}`);
+                    setPostingAnnouncement(false);
+                    setUploadProgress('');
+                    return;
+                }
+
+                fileURL = data.secure_url;
                 fileName = announcementFile.name;
             }
 
