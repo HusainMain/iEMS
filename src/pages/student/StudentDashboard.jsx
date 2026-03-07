@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { collection, query, where, getDocs } from 'firebase/firestore';
+import { collection, query, where, getDocs, orderBy, limit, onSnapshot } from 'firebase/firestore';
 import { db } from '../../services/firebase.config';
-import { Loader2, BookOpen, Clock, FileText, DownloadCloud, FileIcon, MessageSquare } from 'lucide-react';
+import { Loader2, BookOpen, Clock, FileText, DownloadCloud, FileIcon, MessageSquare, AlertTriangle, Info, Bell } from 'lucide-react';
 
 const StudentDashboard = () => {
     const { user } = useAuth();
@@ -12,6 +12,8 @@ const StudentDashboard = () => {
     
     const [loadingAnnouncements, setLoadingAnnouncements] = useState(false);
     const [announcements, setAnnouncements] = useState([]);
+    
+    const [globalBroadcast, setGlobalBroadcast] = useState(null);
 
     // 1. Fetch Subjects Student is Enrolled In
     useEffect(() => {
@@ -67,6 +69,19 @@ const StudentDashboard = () => {
         fetchAnnouncements();
     }, [selectedSubjectId]);
 
+    // 3. Fetch Latest Global Broadcast
+    useEffect(() => {
+        const q = query(collection(db, 'global_announcements'), orderBy('timestamp', 'desc'), limit(1));
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            if (!snapshot.empty) {
+                setGlobalBroadcast({ id: snapshot.docs[0].id, ...snapshot.docs[0].data() });
+            } else {
+                setGlobalBroadcast(null);
+            }
+        });
+        return () => unsubscribe();
+    }, []);
+
     // Helpers
     const getFileIcon = (fileName) => {
         if (!fileName) return <FileIcon className="w-5 h-5 text-gray-500" />;
@@ -112,6 +127,37 @@ const StudentDashboard = () => {
                     </div>
                 </div>
             </div>
+
+            {/* Global Broadcast Ticker */}
+            {globalBroadcast && (
+                <div className={`mb-8 rounded-xl p-4 shadow-sm border-l-4 flex items-start space-x-4 animate-in fade-in slide-in-from-top-4 ${
+                    globalBroadcast.type === 'Urgent' ? 'bg-red-50 border-red-500 text-red-900' : 
+                    globalBroadcast.type === 'Warning' ? 'bg-orange-50 border-orange-500 text-orange-900' : 
+                    'bg-blue-50 border-blue-500 text-blue-900'
+                }`}>
+                    <div className="flex-shrink-0 mt-0.5">
+                        {globalBroadcast.type === 'Urgent' ? <AlertTriangle className="w-6 h-6 text-red-600" /> : 
+                         globalBroadcast.type === 'Warning' ? <AlertTriangle className="w-6 h-6 text-orange-600" /> : 
+                         <Info className="w-6 h-6 text-blue-600" />}
+                    </div>
+                    <div className="flex-1">
+                        <div className="flex items-center justify-between">
+                            <h3 className="text-sm font-bold uppercase tracking-wider flex items-center">
+                                {globalBroadcast.type} Broadcast
+                                <span className="ml-2 text-xs font-medium opacity-70">
+                                    from {globalBroadcast.senderName || 'Admin'}
+                                </span>
+                            </h3>
+                            <span className="text-xs font-medium opacity-70">
+                                {globalBroadcast.timestamp ? new Date(globalBroadcast.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'Just now'}
+                            </span>
+                        </div>
+                        <p className="mt-1 text-sm font-medium leading-relaxed">
+                            {globalBroadcast.message}
+                        </p>
+                    </div>
+                </div>
+            )}
 
             {/* Feed Container */}
             <div className="bg-white rounded-2xl shadow-sm border border-gray-200 min-h-[500px] overflow-hidden">
