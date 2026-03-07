@@ -1,0 +1,83 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function getUserRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && getUserRole() == 'admin';
+    }
+    
+    function isTeacher() {
+      return isAuthenticated() && getUserRole() == 'teacher';
+    }
+
+    // users collection
+    // Read: Admins and Teachers can read all users (to see list of students, etc.). Students can read their own profile.
+    // Create/Update/Delete: Only Admins can manage users (important for bulk upload).
+    match /users/{userId} {
+      allow read: if isAdmin() || isTeacher() || (isAuthenticated() && request.auth.uid == userId);
+      allow create, update, delete: if isAdmin();
+    }
+    
+    // classes collection
+    // Read: authenticated users can read classes
+    // Write: only admins
+    match /classes/{classId} {
+        allow read: if isAuthenticated();
+        allow write: if isAdmin();
+    }
+    
+    // subjects collection
+    // Read: authenticated users can read subjects
+    // Write: only admins
+    match /subjects/{subjectId} {
+        allow read: if isAuthenticated();
+        allow write: if isAdmin();
+    }
+    
+    // announcements collection
+    // Read: authenticated users
+    // Write: Teachers can post (admins too)
+    match /announcements/{annId} {
+        allow read: if isAuthenticated();
+        allow write: if isAdmin() || isTeacher();
+    }
+    
+    // timetable collection
+    // Read: authenticated users
+    // Write: Admins
+    match /timetable/{document=**} {
+        allow read: if isAuthenticated();
+        allow write: if isAdmin();
+    }
+
+    // marks collection
+    // Read: Admins, Teachers, or the student themselves
+    // Write: Only Teachers (and Admins)
+    match /marks/{markId} {
+      allow read: if isAdmin() || isTeacher() || (isAuthenticated() && resource.data.studentId == request.auth.uid);
+      allow write: if isTeacher() || isAdmin();
+    }
+    
+    // attendance collection
+    // Read: Admins, Teachers, or the student themselves
+    // Write: Teachers (and Admins)
+    match /attendance/{attId} {
+        allow read: if isAdmin() || isTeacher() || (isAuthenticated() && resource.data.studentId == request.auth.uid);
+        allow write: if isTeacher() || isAdmin();
+    }
+    
+    // Default denial
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

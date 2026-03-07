@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, onSnapshot, query, doc, setDoc, deleteDoc, updateDoc, where, getDocs, writeBatch } from 'firebase/firestore';
+import { collection, onSnapshot, query, doc, setDoc, deleteDoc, updateDoc, where, getDocs, writeBatch, arrayUnion } from 'firebase/firestore';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { db, secondaryAuth } from '../../services/firebase.config';
 import { addLog } from '../../services/db';
@@ -143,17 +143,17 @@ const AdminDashboard = ({ defaultTab = 'users' }) => {
             if (isEditing) {
                 // Update Firestore ONLY (We don't update Firebase Auth here as it requires re-authentication)
                 const userRef = doc(db, "users", editingUserId);
-                
+
                 const updates = {
                     fullName: formData.fullName,
                     role: formData.role
                 };
-                
+
                 if (formData.role === 'student') {
                     updates.classId = formData.classId;
                     updates.batch = formData.batch;
                 }
-                
+
                 await updateDoc(userRef, updates);
             } else {
                 // 1. Create heavily isolated user via Secondary Firebase Auth
@@ -170,7 +170,7 @@ const AdminDashboard = ({ defaultTab = 'users' }) => {
                 if (formData.role === 'student' && formData.classId) {
                     newUser.classId = formData.classId;
                     newUser.batch = formData.batch;
-                    
+
                     // Generate Enrollment Number
                     const currentClassStudents = users.filter(u => u.role === 'student' && u.classId === formData.classId);
                     const count = currentClassStudents.length + 1;
@@ -182,6 +182,26 @@ const AdminDashboard = ({ defaultTab = 'users' }) => {
                 await setDoc(doc(db, "users", newUid), newUser);
                 await addLog(`Created user: ${formData.fullName || formData.email}`, currentUser?.email);
                 toast.success(`User ${formData.fullName} created!`);
+
+                // 3. Auto-enroll in existing subjects
+                if (formData.role === 'student' && formData.classId) {
+                    try {
+                        const qSubjects = query(collection(db, 'subjects'), where('classId', '==', formData.classId));
+                        const subSnap = await getDocs(qSubjects);
+                        if (!subSnap.empty) {
+                            const enrollBatch = writeBatch(db);
+                            subSnap.forEach(subDoc => {
+                                enrollBatch.update(subDoc.ref, {
+                                    enrolledStudents: arrayUnion(newUid)
+                                });
+                            });
+                            await enrollBatch.commit();
+                        }
+                    } catch (e) {
+                        console.error("Failed to auto-enroll student in subjects:", e);
+                    }
+                }
+
             }
 
             closeUserModal();
@@ -209,12 +229,36 @@ const AdminDashboard = ({ defaultTab = 'users' }) => {
                 const batch = writeBatch(db);
                 let successCount = 0;
                 let failCount = 0;
+                const classToStudentsMap = {};
 
                 try {
                     for (const row of data) {
-                        const { Name, Email, ClassId, Batch, EnrollmentNo } = row;
+                        const Name = row.Name?.trim();
+                        const Email = row.Email?.trim();
+                        const ClassId = row.ClassId?.trim();
+                        const Batch = row.Batch?.trim();
+                        const EnrollmentNo = row.EnrollmentNo?.trim();
 
                         if (!Name || !Email || !ClassId) {
+                            failCount++;
+                            continue;
+                        }
+
+                        // Try to find the actual class Document ID by matching
+                        let mappedClassId = ClassId;
+                        const matchedClass = classesData.find(c =>
+                            c.id === ClassId ||
+                            c.className?.toLowerCase() === ClassId.toLowerCase() ||
+                            `${c.className} ${c.section}`.toLowerCase() === ClassId.toLowerCase() ||
+                            `${c.className}-${c.section}`.toLowerCase() === ClassId.toLowerCase() ||
+                            `${c.className} - ${c.section}`.toLowerCase() === ClassId.toLowerCase() ||
+                            `${c.className} - ${c.section} (${c.gradeLevel})`.toLowerCase() === ClassId.toLowerCase()
+                        );
+
+                        if (matchedClass) {
+                            mappedClassId = matchedClass.id;
+                        } else {
+                            console.error(`Could not map CSV ClassId '${ClassId}' to any Firestore Class Document. Double check the spelling or copy the Document ID directly!`);
                             failCount++;
                             continue;
                         }
@@ -229,25 +273,40 @@ const AdminDashboard = ({ defaultTab = 'users' }) => {
                                 fullName: Name,
                                 email: Email,
                                 role: 'student',
-                                classId: ClassId,
+                                classId: mappedClassId,
                                 batch: Batch || 'All',
                                 createdAt: new Date().toISOString()
                             };
 
                             // Priority Logic for Enrollment Number
+                            let finalEnrollmentNo = '';
                             if (EnrollmentNo && EnrollmentNo.trim() !== '') {
-                                studentData.enrollmentNo = String(EnrollmentNo).trim();
+                                finalEnrollmentNo = String(EnrollmentNo).trim();
+
+                                // Conflict Check
+                                const existingStudent = users.find(u => u.enrollmentNo === finalEnrollmentNo);
+                                if (existingStudent) {
+                                    console.warn(`Skipping row. EnrollmentNo ${finalEnrollmentNo} already exists.`);
+                                    failCount++;
+                                    continue;
+                                }
                             } else {
                                 // Fallback: Auto-generate sequential enrollment number
-                                const currentClassStudents = users.filter(u => u.role === 'student' && u.classId === ClassId);
+                                const currentClassStudents = users.filter(u => u.role === 'student' && u.classId === mappedClassId);
                                 const count = currentClassStudents.length + (successCount + 1);
                                 const paddedCount = String(count).padStart(3, '0');
-                                studentData.enrollmentNo = `ENR-${ClassId.substring(0, 4).toUpperCase()}-${paddedCount}`;
+                                finalEnrollmentNo = `ENR-${mappedClassId.substring(0, 4).toUpperCase()}-${paddedCount}`;
                             }
+                            studentData.enrollmentNo = finalEnrollmentNo;
 
                             const userRef = doc(db, 'users', uid);
                             batch.set(userRef, studentData);
                             successCount++;
+
+                            if (!classToStudentsMap[mappedClassId]) {
+                                classToStudentsMap[mappedClassId] = [];
+                            }
+                            classToStudentsMap[mappedClassId].push(uid);
 
                         } catch (err) {
                             console.error(`Error creating student ${Email}:`, err);
@@ -256,7 +315,31 @@ const AdminDashboard = ({ defaultTab = 'users' }) => {
                     }
 
                     if (successCount > 0) {
+                        try {
+                            const enrollBatch = writeBatch(db);
+                            let enrollUpdates = 0;
+
+                            for (const [clsId, uids] of Object.entries(classToStudentsMap)) {
+                                if (!uids.length) continue;
+                                const qSub = query(collection(db, 'subjects'), where('classId', '==', clsId));
+                                const snapSub = await getDocs(qSub);
+                                snapSub.forEach(subDoc => {
+                                    enrollBatch.update(subDoc.ref, {
+                                        enrolledStudents: arrayUnion(...uids)
+                                    });
+                                    enrollUpdates++;
+                                });
+                            }
+
+                            if (enrollUpdates > 0) {
+                                await enrollBatch.commit();
+                            }
+                        } catch (err) {
+                            console.error("Failed to auto-enroll bulk students:", err);
+                        }
+
                         await batch.commit();
+
                         await addLog(`Bulk upload: imported ${successCount} students`, currentUser?.email);
                         toast.success(`Successfully imported ${successCount} students!`);
                         if (failCount > 0) toast.error(`Failed to import ${failCount} rows.`);
@@ -298,6 +381,16 @@ const AdminDashboard = ({ defaultTab = 'users' }) => {
             } else if (type === 'subject') {
                 await deleteDoc(doc(db, "subjects", data.id));
                 await addLog(`Subject ${data.subjectName} was deleted`, currentUser?.email);
+            } else if (type === 'class') {
+                const classSubjects = subjects.filter(s => s.classId === data.id);
+                const classStudents = users.filter(u => u.classId === data.id);
+                if (classSubjects.length > 0 || classStudents.length > 0) {
+                    toast.error(`Cannot delete class. It has ${classStudents.length} students and ${classSubjects.length} subjects associated.`);
+                    return;
+                }
+                await deleteDoc(doc(db, "classes", data.id));
+                await addLog(`Class ${data.className} was deleted`, currentUser?.email);
+                toast.success('Class deleted successfully!');
             }
             setDeleteConfig({ isOpen: false, type: null, data: null });
         } catch (err) {
@@ -320,7 +413,7 @@ const AdminDashboard = ({ defaultTab = 'users' }) => {
         // Fetch all subjects taught by this teacher
         const qTeacherSubjects = query(collection(db, 'subjects'), where('teacherId', '==', targetTeacherId));
         const snap = await getDocs(qTeacherSubjects);
-        
+
         let allExistingSchedules = [];
         snap.docs.forEach(docSnap => {
             if (docSnap.id === skipSubjectId) return; // Ignore the subject being edited
@@ -367,8 +460,8 @@ const AdminDashboard = ({ defaultTab = 'users' }) => {
         try {
             // Run Teacher Availability Validation
             await passesScheduleValidation(
-                subjectData.schedule, 
-                subjectData.teacherId, 
+                subjectData.schedule,
+                subjectData.teacherId,
                 isEditingSubject ? editingSubjectId : null
             );
             if (isEditingSubject) {
@@ -383,12 +476,25 @@ const AdminDashboard = ({ defaultTab = 'users' }) => {
                 alert("Subject Updated Successfully!");
             } else {
                 const subjectRef = doc(collection(db, "subjects"));
+
+
+                // Auto-enroll existing students in this class
+                let existingStudentIds = [];
+                try {
+                    const qStudents = query(collection(db, 'users'), where('role', '==', 'student'), where('classId', '==', subjectData.classId));
+                    const stuSnap = await getDocs(qStudents);
+                    existingStudentIds = stuSnap.docs.map(st => st.id);
+                } catch (e) {
+                    console.error("Failed to fetch students for new subject:", e);
+                }
+
                 await setDoc(subjectRef, {
                     subjectName: subjectData.subjectName,
                     subjectCode: subjectData.subjectCode,
                     teacherId: subjectData.teacherId,
                     classId: subjectData.classId,
                     schedule: subjectData.schedule || [],
+                    enrolledStudents: existingStudentIds,
                     createdAt: new Date().toISOString()
                 });
                 await addLog(`Created subject: ${subjectData.subjectName}`, currentUser?.email);
@@ -554,7 +660,7 @@ const AdminDashboard = ({ defaultTab = 'users' }) => {
                                     </button>
                                 ))}
                             </div>
-                            
+
                             {activeRoleTab === 'students' && (
                                 <button
                                     onClick={async () => {
@@ -567,13 +673,13 @@ const AdminDashboard = ({ defaultTab = 'users' }) => {
                                                 alert("Please create at least one Class first.");
                                                 return;
                                             }
-                                            
+
                                             let count = 1;
                                             for (let student of studentUsers) {
                                                 if (!student.classId || !student.enrollmentNo) {
                                                     const paddedCount = String(count).padStart(3, '0');
                                                     const eNo = `ENR-${defaultClass.id.substring(0, 4).toUpperCase()}-${paddedCount}`;
-                                                    
+
                                                     await updateDoc(doc(db, "users", student.id), {
                                                         classId: defaultClass.id,
                                                         batch: count % 3 === 0 ? 'C' : count % 2 === 0 ? 'B' : 'A',
@@ -681,7 +787,16 @@ const AdminDashboard = ({ defaultTab = 'users' }) => {
                                                         <td colSpan="5" className="px-6 py-3 text-sm font-bold text-indigo-900 uppercase tracking-wide">
                                                             <div className="flex justify-between items-center">
                                                                 <span>{cls.className} - {cls.section} ({cls.gradeLevel})</span>
-                                                                {isExpanded ? <ChevronDown className="w-5 h-5 text-indigo-500" /> : <ChevronRight className="w-5 h-5 text-indigo-400" />}
+                                                                <div className="flex items-center space-x-4">
+                                                                    <button
+                                                                        onClick={(e) => { e.stopPropagation(); requestDelete('class', cls); }}
+                                                                        className="text-red-400 hover:text-red-600 transition"
+                                                                        title="Delete Class"
+                                                                    >
+                                                                        <Trash2 className="w-5 h-5 inline" />
+                                                                    </button>
+                                                                    {isExpanded ? <ChevronDown className="w-5 h-5 text-indigo-500" /> : <ChevronRight className="w-5 h-5 text-indigo-400" />}
+                                                                </div>
                                                             </div>
                                                         </td>
                                                     </tr>
@@ -985,7 +1100,7 @@ const AdminDashboard = ({ defaultTab = 'users' }) => {
                                         ))}
                                     </select>
                                 </div>
-                                
+
                                 {/* Time Table / Schedule Section */}
                                 <div className="border-t border-gray-200 pt-4 mt-6">
                                     <div className="flex justify-between items-center mb-3">
@@ -994,8 +1109,8 @@ const AdminDashboard = ({ defaultTab = 'users' }) => {
                                         </label>
                                         <button
                                             type="button"
-                                            onClick={() => setSubjectData(prev => ({ 
-                                                ...prev, 
+                                            onClick={() => setSubjectData(prev => ({
+                                                ...prev,
                                                 schedule: [...(prev.schedule || []), { day: 'Monday', startTime: '09:35', endTime: '10:30', batch: 'All', room: '' }]
                                             }))}
                                             className="text-xs bg-indigo-50 text-indigo-700 px-2 py-1 rounded border border-indigo-200 hover:bg-indigo-100 flex items-center transition"
@@ -1021,7 +1136,7 @@ const AdminDashboard = ({ defaultTab = 'users' }) => {
                                                 >
                                                     <X className="w-4 h-4" />
                                                 </button>
-                                                
+
                                                 <div className="grid grid-cols-2 gap-3 pr-6">
                                                     <div>
                                                         <label className="block text-xs font-medium text-gray-500 mb-1">Day</label>
@@ -1168,13 +1283,12 @@ const AdminDashboard = ({ defaultTab = 'users' }) => {
                                     </div>
                                 )}
 
-                                <div 
-                                    className={`border-2 border-dashed rounded-xl p-8 flex flex-col items-center justify-center transition-colors cursor-pointer ${
-                                        bulkFile ? 'border-emerald-500 bg-emerald-50' : 'border-gray-300 hover:border-emerald-400 hover:bg-gray-50'
-                                    }`}
+                                <div
+                                    className={`border-2 border-dashed rounded-xl p-8 flex flex-col items-center justify-center transition-colors cursor-pointer ${bulkFile ? 'border-emerald-500 bg-emerald-50' : 'border-gray-300 hover:border-emerald-400 hover:bg-gray-50'
+                                        }`}
                                     onClick={() => document.getElementById('bulk-csv-input').click()}
                                 >
-                                    <input 
+                                    <input
                                         id="bulk-csv-input"
                                         type="file"
                                         accept=".csv"
@@ -1185,8 +1299,8 @@ const AdminDashboard = ({ defaultTab = 'users' }) => {
                                         <>
                                             <FileText className="w-12 h-12 text-emerald-600 mb-2" />
                                             <p className="text-sm font-bold text-gray-900">{bulkFile.name}</p>
-                                            <button 
-                                                type="button" 
+                                            <button
+                                                type="button"
                                                 className="text-xs text-red-500 underline mt-2"
                                                 onClick={(e) => { e.stopPropagation(); setBulkFile(null); }}
                                             >

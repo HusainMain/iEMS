@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { collection, query, where, getDocs, addDoc, serverTimestamp, setDoc, doc, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, addDoc, serverTimestamp, setDoc, doc, deleteDoc, writeBatch } from 'firebase/firestore';
 import { db } from '../../services/firebase.config';
 import { Loader2, Upload, FileText, Check, X, Plus, BookOpen, AlertCircle, Trash2, DownloadCloud, Users } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -444,7 +444,7 @@ const TeacherClasses = () => {
             return;
         }
 
-        const entries = Object.entries(bulkMarks).filter(([_, val]) => val !== '');
+        const entries = Object.entries(bulkMarks).filter(([, val]) => val !== '');
         if (entries.length === 0) {
             toast.error("No marks entered!");
             return;
@@ -911,14 +911,6 @@ const TeacherClasses = () => {
                                 </div>
                             </div>
                         )}
-                    </div>
-                </div>
-            ) : (
-                <div className="bg-blue-50 rounded-xl border border-blue-100 p-8 text-center text-blue-800">
-                    <BookOpen className="w-12 h-12 mx-auto text-blue-300 mb-3" />
-                    <p className="font-medium">Please select a Class and Subject from the dropdowns above to access the classroom controls.</p>
-                </div>
-            )}
                 {activeTab === 'bulk-marks' && (
                     <div className="space-y-6">
                         {/* Filters Card */}
@@ -1036,6 +1028,8 @@ const TeacherClasses = () => {
                                                     <td className="px-6 py-4">
                                                         <input 
                                                             type="number"
+                                                            min="0"
+                                                            max={bulkMaxMarks || ''}
                                                             className={`w-24 px-3 py-2 border rounded-lg text-sm focus:ring-indigo-500 focus:border-indigo-500 ${
                                                                 bulkMarks[stu.id] > (Number(bulkMaxMarks) || Infinity) ? 'border-red-500 bg-red-50' : 'border-gray-200 bg-white'
                                                             }`}
@@ -1087,7 +1081,14 @@ const TeacherClasses = () => {
                         </div>
                     </div>
                 )}
-            </main>
+                    </div>
+                </div>
+            ) : (
+                <div className="bg-blue-50 rounded-xl border border-blue-100 p-8 text-center text-blue-800">
+                    <BookOpen className="w-12 h-12 mx-auto text-blue-300 mb-3" />
+                    <p className="font-medium">Please select a Class and Subject from the dropdowns above to access the classroom controls.</p>
+                </div>
+            )}
         </div>
     );
 };

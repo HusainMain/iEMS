@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword, setPersistence, browserLocalPersistence } from 'firebase/auth';
-import { doc, setDoc } from 'firebase/firestore';
-import { auth, db } from '../services/firebase.config';
+
+import { signInWithEmailAndPassword, setPersistence, browserLocalPersistence } from 'firebase/auth';
+import { auth } from '../services/firebase.config';
 import { LogIn, AlertCircle } from 'lucide-react';
+
 
 const Login = () => {
     console.log("Rendering Login Page");
@@ -11,7 +11,6 @@ const Login = () => {
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
-    const navigate = useNavigate();
 
     const handleLogin = async (e) => {
         e.preventDefault();
@@ -37,43 +36,7 @@ const Login = () => {
         }
     };
 
-    const seedDummyUsers = async () => {
-        setLoading(true);
-        setError('');
-        const dummyUsers = [
-            { email: "admin@iems.com", role: "admin", name: "System Admin", pass: "password123" },
-            { email: "teacher@iems.com", role: "teacher", name: "Prof. Smith", pass: "password123" },
-            { email: "student@iems.com", role: "student", name: "John Doe", pass: "password123" }
-        ];
 
-        try {
-            for (const u of dummyUsers) {
-                try {
-                    const userCredential = await createUserWithEmailAndPassword(auth, u.email, u.pass);
-                    const uid = userCredential.user.uid;
-
-                    await setDoc(doc(db, "users", uid), {
-                        email: u.email,
-                        role: u.role,
-                        fullName: u.name,
-                        createdAt: new Date().toISOString()
-                    });
-                    console.log(`Created ${u.role}: ${u.email}`);
-                } catch (err) {
-                    if (err.code !== 'auth/email-already-in-use') {
-                        throw err;
-                    }
-                    console.log(`User ${u.email} already exists.`);
-                }
-            }
-            alert("Dummy users seeded successfully! Password is 'password123' for all.");
-        } catch (err) {
-            console.error(err);
-            setError('Failed to seed users: ' + err.message);
-        } finally {
-            setLoading(false);
-        }
-    };
 
     return (
         <div className="min-h-screen flex items-center justify-center bg-blue-500 py-12 px-4 sm:px-6 lg:px-8">
