@@ -1,16 +1,68 @@
-# React + Vite
+# Integrated Education Management System (iEMS)
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+An Integrated Education Management System built with React, Vite, Tailwind CSS, and Firebase. This application provides a comprehensive platform for managing educational institutions with role-based access control for Administrators, Teachers, and Students.
 
-Currently, two official plugins are available:
+## 🚀 Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+### Role-Based Access Control
+- **Admin:** Full system access. Can manage all users (CRUD operations for teachers, students, and other admins).
+- **Teacher:** Manage assigned courses, input student grades, and take class attendance.
+- **Student:** View personal academic records (grades, attendance) and download course materials.
 
-## React Compiler
+### Tech Stack
+- **Frontend Framework:** React 19 + Vite
+- **Styling:** Tailwind CSS, with Lucide React for icons
+- **Backend & Database:** Firebase (Authentication, Firestore Database, Cloud Storage)
+- **Routing:** React Router DOM
+- **Charts:** Recharts
+- **PDF Generation:** jsPDF & html2canvas-pro
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## 📁 Architecture Overview
 
-## Expanding the ESLint configuration
+- **`src/components`**: Reusable UI components (Buttons, Inputs, Sidebars, Navbars).
+- **`src/contexts`**: React Context (e.g., AuthContext) for user session and role management.
+- **`src/pages`**: Role-specific views categorizing Admin, Teacher, and Student features.
+- **`src/services`**: Firebase configuration and database query hooks.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+*For more details on the database schema, check [schema.md](./schema.md). For architecture details, check [architecture.md](./architecture.md).*
+
+## 🛠 Setup & Installation
+
+1. **Clone the repository:**
+   ```bash
+   git clone <repository-url>
+   cd iEMS
+   ```
+
+2. **Install dependencies:**
+   ```bash
+   npm install
+   ```
+
+3. **Environment Setup:**
+   Create a `.env` (or `.env.production`) file in the root directory and add your Firebase configuration keys:
+   ```env
+   VITE_FIREBASE_API_KEY=your_api_key
+   VITE_FIREBASE_AUTH_DOMAIN=your_auth_domain
+   VITE_FIREBASE_PROJECT_ID=your_project_id
+   VITE_FIREBASE_STORAGE_BUCKET=your_storage_bucket
+   VITE_FIREBASE_MESSAGING_SENDER_ID=your_messaging_sender_id
+   VITE_FIREBASE_APP_ID=your_app_id
+   ```
+   *Note: Never expose actual Firebase API keys in public repositories.*
+
+4. **Start the development server:**
+   ```bash
+   npm run dev
+   ```
+
+## 🏗 Scripts
+
+- `npm run dev`: Boot up the Vite development server.
+- `npm run build`: Build the application for production.
+- `npm run preview`: Locally preview the production build.
+- `npm run lint`: Run ESLint to catch potential issues.
+
+## 🔒 Security & Rules
+
+The project uses Firebase Firestore rules (`firestore.rules`) to ensure data privacy and route-based role protections via React Router. Only authenticated users with the appropriate roles can access specific Firebase collections and frontend routes.
